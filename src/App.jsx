@@ -680,7 +680,7 @@ function ChunkCard({ chunk, rank, isRelevant, isHighlighted }) {
 // ── Main Playground Section ──────────────────────────────────────────────────
 
 function PlaygroundSection() {
-  const [activeQuery, setActiveQuery]   = useState(null);  // QUERIES[i]
+  const [activeQuery, setActiveQuery]   = useState(QUERIES[0]);
   const [k, setK]                       = useState(3);
   const [alpha, setAlpha]               = useState(50);    // 0–100, maps to 0.0–1.0
   const [hoveredChunk, setHoveredChunk] = useState(null);
@@ -742,9 +742,7 @@ function PlaygroundSection() {
         </div>
       </div>
 
-      {!q && <div className="pg-hint">← Pick a topic to start</div>}
-
-      {q && results && (<>
+      {results && (<>
 
         {/* Hero alpha slider */}
         <div className="pg-alpha-hero">
@@ -832,7 +830,7 @@ function PlaygroundSection() {
                   <div className="pg-tcol-label" style={{color}}>{label} <span className="pg-mc-hint">top {k}</span></div>
                   {results[key].slice(0, k).map((chunk, rank) => (
                     <ChunkCard key={chunk.id} chunk={chunk} rank={rank}
-                      isRelevant={relevantSet.size > 0 ? relevantSet.has(chunk.id) : null}
+                      isRelevant={relevantSet.has(chunk.id)}
                       isHighlighted={hoveredChunk === chunk.id}
                     />
                   ))}
@@ -846,7 +844,7 @@ function PlaygroundSection() {
   );
 }
 
-// ── Section: Embedding Space ──────────────────────────────────────────────────
+// ── Section: Embedding Space ─────────────────────────────────────────────────
 
 const CHUNK_DEMO_TEXT = `The James Webb Space Telescope has transformed our understanding of the early universe. By capturing infrared light from objects too distant and faint for previous instruments, Webb reveals galaxies that formed just hundreds of millions of years after the Big Bang.
 
