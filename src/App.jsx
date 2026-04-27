@@ -388,9 +388,16 @@ function MetricsSection() {
             </div>
           </div>
 
-          {/* K free input */}
+          {/* K selector — pills + free input */}
           <div className="metrics-live-controls">
-            <span className="controls-label">K (top results retrieved)</span>
+            <span className="controls-label">K</span>
+            <div className="k-pills">
+              {[3, 5, 10, 20].map((n) => (
+                <button key={n} type="button"
+                  className={`k-pill ${k === n ? "active" : ""}`}
+                  onClick={() => setK(n)}>{n}</button>
+              ))}
+            </div>
             <KInput value={k} onChange={setK} />
           </div>
 
@@ -422,6 +429,17 @@ function MetricsSection() {
               </div>
             </div>
           ))}
+
+          {/* Callout: warn when all metrics are identical */}
+          {(() => {
+            const f1s = Object.values(liveMetrics).map(m => m.f1);
+            const allSame = f1s.every(v => Math.abs(v - f1s[0]) < 0.001);
+            return allSame ? (
+              <div className="metrics-identical-hint">
+                ↑ K is too high — every method finds all relevant chunks. Try <strong>K=3</strong> to see real differences.
+              </div>
+            ) : null;
+          })()}
 
           {/* Live bars — all 4 methods */}
           <div className="metrics-live-bars">

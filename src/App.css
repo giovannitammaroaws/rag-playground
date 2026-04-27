@@ -1329,6 +1329,15 @@
 .metrics-cell--spam    { outline: 2px solid #dc2626; }
 .metrics-cell--unfound { background: #f1f5f9; color: #94a3b8; }
 
+.metrics-identical-hint {
+  background: #fef3c7;
+  border: 1px solid #fbbf24;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #92400e;
+}
+
 .metrics-live-bars {
   display: grid;
   grid-template-columns: 1fr 1fr;
