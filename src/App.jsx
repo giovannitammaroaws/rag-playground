@@ -314,18 +314,29 @@ function RetrievalSection() {
 function MetricsSection() {
   const [k, setK]         = useState(3);
   const [topic, setTopic] = useState(QUERIES[0]);
+  const [alpha, setAlpha] = useState(50);
+  const alphaNorm         = alpha / 100;
 
-  const bm25res = useMemo(() => bm25Search(topic.query, CHUNKS), [topic]);
-  const semres  = useMemo(() => semanticSearchCorpus(topic.key, CHUNKS) ?? bm25res, [topic, bm25res]);
+  const tfidfres  = useMemo(() => tfidfSearch(topic.query, CHUNKS), [topic]);
+  const bm25res   = useMemo(() => bm25Search(topic.query, CHUNKS), [topic]);
+  const semres    = useMemo(() => semanticSearchCorpus(topic.key, CHUNKS) ?? bm25res, [topic, bm25res]);
+  const hybridres = useMemo(() => hybridSearchCorpus(topic.key, topic.query, CHUNKS, alphaNorm), [topic, alphaNorm]);
 
   const liveMetrics = useMemo(() => ({
-    bm25:     computeCorpusMetrics(bm25res, topic.relevant, k),
-    semantic: computeCorpusMetrics(semres,  topic.relevant, k),
-  }), [bm25res, semres, topic, k]);
+    tfidf:    computeCorpusMetrics(tfidfres,  topic.relevant, k),
+    bm25:     computeCorpusMetrics(bm25res,   topic.relevant, k),
+    semantic: computeCorpusMetrics(semres,    topic.relevant, k),
+    hybrid:   computeCorpusMetrics(hybridres, topic.relevant, k),
+  }), [tfidfres, bm25res, semres, hybridres, topic, k]);
 
   const relevantSet = new Set(topic.relevant);
-  const bm25top  = bm25res.slice(0, k);
-  const semantop = semres.slice(0, k);
+
+  const METHODS = [
+    { key: "tfidf",    label: "TF-IDF",   color: "#6366f1", chunks: tfidfres.slice(0, k)  },
+    { key: "bm25",     label: "BM25",     color: "#06b6d4", chunks: bm25res.slice(0, k)   },
+    { key: "semantic", label: "Semantic", color: "#10b981", chunks: semres.slice(0, k)    },
+    { key: "hybrid",   label: `Hybrid α=${alphaNorm.toFixed(2)}`, color: "#f59e0b", chunks: hybridres.slice(0, k) },
+  ];
 
   return (
     <section className="page-section" id="metrics">
@@ -383,17 +394,24 @@ function MetricsSection() {
             <KInput value={k} onChange={setK} />
           </div>
 
-          {/* Hit/miss strips */}
-          {[
-            { label: "BM25",     color: "#06b6d4", chunks: bm25top  },
-            { label: "Semantic", color: "#10b981", chunks: semantop  },
-          ].map(({ label, color, chunks }) => (
-            <div key={label} className="metrics-strip-wrap">
+          {/* Hybrid alpha slider */}
+          <div className="metrics-live-controls" style={{gap:10}}>
+            <span className="controls-label">Hybrid α</span>
+            <span style={{fontSize:11, color:"#10b981"}}>Semantic</span>
+            <input type="range" min="0" max="100" value={alpha}
+              onChange={(e) => setAlpha(+e.target.value)}
+              className="alpha-slider" style={{flex:1, maxWidth:180}} />
+            <span style={{fontSize:11, color:"#06b6d4"}}>BM25</span>
+            <span style={{fontSize:12, fontWeight:700, color:"#f59e0b", minWidth:32}}>{alphaNorm.toFixed(2)}</span>
+          </div>
+
+          {/* Hit/miss strips — all 4 methods */}
+          {METHODS.map(({ key, label, color, chunks }) => (
+            <div key={key} className="metrics-strip-wrap">
               <div className="metrics-strip-label" style={{ color }}>{label}</div>
               <div className="metrics-strip">
                 {chunks.map((chunk) => {
                   const hit = relevantSet.has(chunk.id);
-                  const tc  = TYPE_COLORS[chunk.type];
                   return (
                     <div key={chunk.id} title={`#${chunk.id} ${chunk.type}`}
                       className={`metrics-cell ${hit ? "metrics-cell--hit" : "metrics-cell--miss"}`}>
@@ -405,12 +423,9 @@ function MetricsSection() {
             </div>
           ))}
 
-          {/* Live bars */}
+          {/* Live bars — all 4 methods */}
           <div className="metrics-live-bars">
-            {[
-              { key: "bm25",     label: "BM25",     color: "#06b6d4" },
-              { key: "semantic", label: "Semantic", color: "#10b981" },
-            ].map(({ key, label, color }) => {
+            {METHODS.map(({ key, label, color }) => {
               const m = liveMetrics[key];
               return (
                 <div key={key} className="metrics-live-method">
