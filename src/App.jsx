@@ -3,12 +3,11 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   ScatterChart, Scatter, ZAxis,
 } from "recharts";
-import POSITIONS_2D   from "./data/positions_2d.json";
 import CORPUS_POS     from "./data/corpus_positions_2d.json";
 import "./App.css";
 import { ARTICLES, TOPICS } from "./data/articles.js";
 import { CHUNKS, QUERIES } from "./data/corpus.js";
-import { tfidfSearch, bm25Search, semanticSearch, hybridSearch,
+import { tfidfSearch, bm25Search,
          semanticSearchCorpus, hybridSearchCorpus } from "./lib/search.js";
 import { computeMetrics, computeCorpusMetrics } from "./lib/metrics.js";
 import { runMockLLM } from "./lib/mockLLM.js";
@@ -208,8 +207,10 @@ function IconRefine() {
 
 function RetrievalSection() {
   const [highlighted, setHighlighted] = useState(null);
-  const [q, setQ] = useState(QUERIES[0]);
-  const relevantSet = new Set(q.relevant);
+  const [q, setQ]           = useState(QUERIES[0]);
+  const [alpha, setAlpha]   = useState(50); // 0=Semantic, 100=BM25
+  const alphaNorm           = alpha / 100;
+  const relevantSet         = new Set(q.relevant);
 
   const rankings = useMemo(() => {
     const sem = semanticSearchCorpus(q.key, CHUNKS);
@@ -217,15 +218,15 @@ function RetrievalSection() {
       tfidf:    tfidfSearch(q.query, CHUNKS).slice(0, 4),
       bm25:     bm25Search(q.query, CHUNKS).slice(0, 4),
       semantic: (sem ?? bm25Search(q.query, CHUNKS)).slice(0, 4),
-      hybrid:   hybridSearchCorpus(q.key, q.query, CHUNKS, 0.5).slice(0, 4),
+      hybrid:   hybridSearchCorpus(q.key, q.query, CHUNKS, alphaNorm).slice(0, 4),
     };
-  }, [q]);
+  }, [q, alphaNorm]);
 
   const COLS = [
-    { key: "tfidf",    label: "TF-IDF",   color: "#6366f1", tag: "term freq × IDF",                note: "Rewards keyword count — wrong-context spam cheats" },
-    { key: "bm25",     label: "BM25",      color: "#06b6d4", tag: "+ length norm + saturation",      note: "Better than TF-IDF, still keyword-only" },
-    { key: "semantic", label: "Semantic",  color: "#10b981", tag: "cosine similarity on embeddings",  note: "Finds meaning — spam sinks, synonym rises" },
-    { key: "hybrid",   label: "Hybrid",    color: "#f59e0b", tag: "RRF(BM25 + Semantic)",            note: "Best of both worlds" },
+    { key: "tfidf",    label: "TF-IDF",   color: "#6366f1", tag: "term freq × IDF",                         note: "Rewards keyword count — wrong-context spam cheats" },
+    { key: "bm25",     label: "BM25",      color: "#06b6d4", tag: "+ length norm + saturation",               note: "Better than TF-IDF, still keyword-only" },
+    { key: "semantic", label: "Semantic",  color: "#10b981", tag: "cosine similarity on embeddings",           note: "Finds meaning — spam sinks, synonym rises" },
+    { key: "hybrid",   label: "Hybrid",    color: "#f59e0b", tag: `RRF · α=${alphaNorm.toFixed(2)}`,          note: alphaNorm < 0.5 ? "Leaning Semantic" : alphaNorm > 0.5 ? "Leaning BM25" : "Balanced blend" },
   ];
 
   return (
@@ -245,6 +246,16 @@ function RetrievalSection() {
               onClick={() => setQ(qo)}>{qo.label}</button>
           ))}
         </div>
+      </div>
+
+      <div className="retrieval-alpha-bar">
+        <span className="retrieval-alpha-label" style={{color:"#f59e0b"}}>HYBRID</span>
+        <span className="retrieval-alpha-end" style={{color:"#10b981"}}>Semantic</span>
+        <input type="range" min="0" max="100" value={alpha}
+          onChange={(e) => setAlpha(+e.target.value)}
+          className="alpha-slider" style={{flex:1, maxWidth:200}} />
+        <span className="retrieval-alpha-end" style={{color:"#06b6d4"}}>BM25</span>
+        <span className="retrieval-alpha-val">α = {alphaNorm.toFixed(2)}</span>
       </div>
 
       <div className="retrieval-demo-grid">
@@ -911,29 +922,32 @@ function EmbeddingSection() {
 
   const semRanking = useMemo(() => {
     if (!activeTopicKey) return new Set();
-    const ranked = semanticSearch(activeTopicKey, ARTICLES);
+    const ranked = semanticSearchCorpus(activeTopicKey, CHUNKS);
+    if (!ranked) return new Set();
     return new Set(ranked.slice(0, 5).map((d) => d.id));
   }, [activeTopicKey]);
 
   const scatterData = useMemo(() => {
-    return TOPICS.map((t) => ({
-      ...t,
-      tc: TOPIC_COLORS[t.key],
-      points: ARTICLES.filter((a) => a.category === t.key).map((a) => {
-        const [x, y] = POSITIONS_2D.docs[String(a.id)];
+    return QUERIES.map((q) => ({
+      key: q.key,
+      label: q.label,
+      tc: TOPIC_COLORS[q.key],
+      points: CHUNKS.filter((c) => c.topic === q.key).map((c) => {
+        const [x, y] = CORPUS_POS.chunks[String(c.id)];
         return {
-          x, y, id: a.id, title: a.title,
-          isSpam: a.note?.startsWith("keyword spam"),
-          isSynonym: a.note?.startsWith("synonym"),
-          isTop5: semRanking.has(a.id),
+          x, y, id: c.id,
+          title: c.text.slice(0, 55) + "…",
+          isSpam: c.type === "spam",
+          isSynonym: c.type === "synonym",
+          isTop5: semRanking.has(c.id),
         };
       }),
     }));
   }, [semRanking]);
 
   const queryPoint = activeTopicKey ? (() => {
-    const [x, y] = POSITIONS_2D.queries[activeTopicKey];
-    return [{ x, y, title: `Query: ${TOPICS.find(t => t.key === activeTopicKey)?.label}` }];
+    const [x, y] = CORPUS_POS.queries[activeTopicKey];
+    return [{ x, y, title: `Query: ${QUERIES.find(q => q.key === activeTopicKey)?.label}` }];
   })() : [];
 
   return (
@@ -941,7 +955,7 @@ function EmbeddingSection() {
       <div className="section-header">
         <span className="section-tag">How Semantic Works</span>
         <h2 className="section-title">From Text to Vectors to Retrieval</h2>
-        <p className="section-sub">Text is encoded into dense 768-dim vectors. The scatter plot shows all 25 articles projected to 2D via PCA. Pick a topic to see where its query lands and which articles are closest.</p>
+        <p className="section-sub">Text is encoded into dense 768-dim vectors. The scatter plot shows all 12 corpus chunks projected to 2D via PCA. Pick a topic to see where its query lands and which chunks are closest.</p>
       </div>
 
       <div className="embed-layout">
@@ -957,12 +971,12 @@ function EmbeddingSection() {
           <div className="embed-panel-title">2. Embeddings live in vector space. Semantic retrieval = nearest neighbors.</div>
 
           <div className="embed-topic-pills">
-            {TOPICS.map((t) => (
-              <button key={t.key} type="button"
-                className={`topic-pill ${activeTopicKey === t.key ? "active" : ""}`}
-                style={activeTopicKey === t.key ? { background: TOPIC_COLORS[t.key].color, borderColor: TOPIC_COLORS[t.key].color } : {}}
-                onClick={() => setActiveTopicKey(activeTopicKey === t.key ? null : t.key)}>
-                {t.label}
+            {QUERIES.map((q) => (
+              <button key={q.key} type="button"
+                className={`topic-pill ${activeTopicKey === q.key ? "active" : ""}`}
+                style={activeTopicKey === q.key ? { background: TOPIC_COLORS[q.key].color, borderColor: TOPIC_COLORS[q.key].color } : {}}
+                onClick={() => setActiveTopicKey(activeTopicKey === q.key ? null : q.key)}>
+                {q.label}
               </button>
             ))}
           </div>
