@@ -1050,30 +1050,36 @@ function EmbeddingSection() {
 }
 
 // ── Section: HNSW ────────────────────────────────────────────────────────────
-// Pre-defined HNSW graph for 12 corpus chunks (hand-crafted for demo clarity).
-// Layer 2 = entry points (3 nodes), Layer 1 = routing (6 nodes), Layer 0 = all nodes.
+// Pre-defined HNSW graph for 20 corpus chunks (hand-crafted for demo clarity).
+// Layer 2 = entry points (5 nodes, one per topic), Layer 1 = routing, Layer 0 = all nodes.
 const HNSW_LAYERS = [
-  // layer 2 — top, coarse, long edges
-  { nodes: [0, 4, 8], edges: [[0,4],[0,8],[4,8]] },
-  // layer 1 — mid
-  { nodes: [0, 1, 4, 5, 8, 9], edges: [[0,1],[4,5],[8,9],[0,4],[4,8]] },
-  // layer 0 — all
-  { nodes: [0,1,2,3,4,5,6,7,8,9,10,11], edges: [[0,1],[1,2],[2,3],[4,5],[5,6],[6,7],[8,9],[9,10],[10,11],[0,4],[4,8],[1,5],[5,9]] },
+  // layer 2 — one entry point per topic (normal chunks: 0,4,8,12,16)
+  { nodes: [0, 4, 8, 12, 16], edges: [[0,4],[4,8],[8,12],[12,16],[16,0],[0,8],[4,12]] },
+  // layer 1 — two per topic + cross-topic links
+  { nodes: [0,1, 4,5, 8,9, 12,13, 16,17],
+    edges: [[0,1],[4,5],[8,9],[12,13],[16,17],[0,4],[4,8],[8,12],[12,16],[16,0]] },
+  // layer 0 — all nodes
+  { nodes: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19],
+    edges: [[0,1],[1,2],[2,3],[4,5],[5,6],[6,7],[8,9],[9,10],[10,11],
+            [12,13],[13,14],[14,15],[16,17],[17,18],[18,19],
+            [0,4],[4,8],[8,12],[12,16],[1,5],[5,9],[9,13],[13,17]] },
 ];
 
-const QUERY_KEYS = ["ai","climate","space"];
-const TOPIC_LABEL = { ai:"AI", climate:"Climate", space:"Space" };
+const QUERY_KEYS = ["ai","finance","health","climate","space"];
+const TOPIC_LABEL = { ai:"AI", finance:"Finance", health:"Health", climate:"Climate", space:"Space" };
 
 function HNSWSection() {
   const [queryKey, setQueryKey]   = useState("ai");
   const [layer,    setLayer]      = useState(2);
   const [step,     setStep]       = useState(null); // null = idle, 0..N = animating
 
-  // Search path per query (hand-crafted to match actual graph)
+  // Search path per query (hand-crafted to illustrate greedy graph traversal)
   const PATHS = {
-    ai:      [8, 4, 0, 1],   // start at entry 8 (space), go to 4 (climate entry), go to 0 (AI entry), refine to 1
-    climate: [0, 4, 5],
-    space:   [0, 8, 9],
+    ai:      [16, 8, 4, 0, 1],   // start far (space), navigate through health+finance toward AI
+    finance: [0, 4, 5],
+    health:  [4, 8, 9],
+    climate: [0, 12, 13],
+    space:   [0, 8, 16, 17],
   };
   const path = PATHS[queryKey];
 
@@ -1091,7 +1097,7 @@ function HNSWSection() {
   const visitedNodes = step !== null ? new Set(path.slice(0, step + 1)) : new Set();
   const currentNode  = step !== null ? path[step] : null;
 
-  const CHUNK_TOPIC_COLOR = { ai:"#6366f1", climate:"#059669", space:"#0891b2" };
+  const CHUNK_TOPIC_COLOR = { ai:"#6366f1", finance:"#b45309", health:"#15803d", climate:"#059669", space:"#0891b2" };
   function chunkColor(id) {
     const c = CHUNKS[id];
     return CHUNK_TOPIC_COLOR[c?.topic] || "#94a3b8";
@@ -1218,7 +1224,7 @@ function HNSWSection() {
           </svg>
 
           <div className="hnsw-legend-row">
-            {["ai","climate","space"].map(t => (
+            {["ai","finance","health","climate","space"].map(t => (
               <span key={t} className="embed-legend-item">
                 <span className="embed-legend-dot" style={{background: CHUNK_TOPIC_COLOR[t]}} />{TOPIC_LABEL[t]}
               </span>
