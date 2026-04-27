@@ -1176,12 +1176,13 @@
   gap: 6px;
   padding: 7px 10px;
   border-bottom: 1px solid #f8fafc;
-  transition: background 0.1s;
-  cursor: default;
+  transition: background 0.1s, box-shadow 0.15s;
+  cursor: pointer;
 }
 
 .retrieval-row:last-child { border-bottom: none; }
 .retrieval-row--hl { background: #f0f9ff; }
+.retrieval-row--selected { box-shadow: inset 0 0 0 2px #0f172a; }
 .retrieval-row--spam { background: #fff7f7; }
 .retrieval-row--spam.retrieval-row--hl { background: #fee2e2; }
 
@@ -1294,6 +1295,95 @@
   align-items: flex-end;
   gap: 2px;
   flex-shrink: 0;
+}
+
+.retrieval-explain-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.3fr) minmax(190px, 0.8fr) minmax(190px, 0.8fr) minmax(220px, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.retrieval-explain-main,
+.retrieval-signal-card,
+.retrieval-takeaway-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.retrieval-explain-main {
+  border-left: 4px solid #f59e0b;
+}
+
+.retrieval-explain-kicker {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin-bottom: 7px;
+  text-transform: uppercase;
+}
+
+.retrieval-explain-title {
+  align-items: center;
+  color: #0f172a;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 15px;
+  font-weight: 900;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.retrieval-explain-rank {
+  background: #e2e8f0;
+  border-radius: 999px;
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 3px 8px;
+}
+
+.retrieval-explain-text {
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0 0 6px;
+}
+
+.retrieval-signal-row,
+.retrieval-compare-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.retrieval-signal-row span,
+.retrieval-compare-row span {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.retrieval-signal-row strong,
+.retrieval-compare-row strong {
+  color: #0f172a;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.retrieval-mini-takeaway,
+.retrieval-takeaway-card p {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .retrieval-callout-row {

@@ -215,6 +215,7 @@ function IconRefine() {
 
 function RetrievalSection() {
   const [highlighted, setHighlighted] = useState(null);
+  const [selected, setSelected] = useState({ method: "hybrid", chunkId: QUERIES[0].relevant[0] });
   const [q, setQ]           = useState(QUERIES[0]);
   const [alpha, setAlpha]   = useState(50); // 0=Semantic, 100=BM25
   const alphaNorm           = alpha / 100;
@@ -229,6 +230,30 @@ function RetrievalSection() {
       hybrid:   hybridSearchCorpus(q.key, q.query, CHUNKS, alphaNorm).slice(0, 4),
     };
   }, [q, alphaNorm]);
+
+  useEffect(() => {
+    setHighlighted(null);
+    setSelected({ method: "hybrid", chunkId: q.relevant[0] });
+  }, [q]);
+
+  const selectedChunk = CHUNKS.find((chunk) => chunk.id === selected.chunkId) ?? CHUNKS[q.relevant[0]];
+  const fullRankings = useMemo(() => {
+    const sem = semanticSearchCorpus(q.key, CHUNKS);
+    return {
+      tfidf: tfidfSearch(q.query, CHUNKS),
+      bm25: bm25Search(q.query, CHUNKS),
+      semantic: sem ?? bm25Search(q.query, CHUNKS),
+      hybrid: hybridSearchCorpus(q.key, q.query, CHUNKS, alphaNorm),
+    };
+  }, [q, alphaNorm]);
+  const selectedWhy = useMemo(() => buildWhyData({
+    methodKey: selected.method,
+    chunk: selectedChunk,
+    results: fullRankings,
+    query: q.query,
+    k: 4,
+    alphaNorm,
+  }), [selected.method, selectedChunk, fullRankings, q, alphaNorm]);
 
   const COLS = [
     { key: "tfidf",    label: "TF-IDF",   color: "#6366f1", tag: "term freq × IDF",                         note: "Rewards keyword count — wrong-context spam cheats" },
@@ -282,9 +307,10 @@ function RetrievalSection() {
                 const tc         = TYPE_COLORS[chunk.type];
                 return (
                   <div key={chunk.id}
-                    className={`retrieval-row ${highlighted === chunk.id ? "retrieval-row--hl" : ""} ${isSpam ? "retrieval-row--spam" : ""}`}
+                    className={`retrieval-row ${highlighted === chunk.id || selected.chunkId === chunk.id ? "retrieval-row--hl" : ""} ${selected.chunkId === chunk.id ? "retrieval-row--selected" : ""} ${isSpam ? "retrieval-row--spam" : ""}`}
                     onMouseEnter={() => setHighlighted(chunk.id)}
-                    onMouseLeave={() => setHighlighted(null)}>
+                    onMouseLeave={() => setHighlighted(null)}
+                    onClick={() => setSelected({ method: key, chunkId: chunk.id })}>
                     <span className="retrieval-row-rank" style={{ color }}>#{rank + 1}</span>
                     <span className="retrieval-row-type" style={{ color: tc.badge, background: tc.bg }}>{chunk.type}</span>
                     <span className="retrieval-row-title">{chunk.text.slice(0, 55)}…</span>
@@ -301,6 +327,45 @@ function RetrievalSection() {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="retrieval-explain-panel">
+        <div className="retrieval-explain-main">
+          <div className="retrieval-explain-kicker">Selected chunk explanation</div>
+          <h3 className="retrieval-explain-title">
+            Chunk #{selectedChunk.id} in <span style={{ color: EXPLAIN_METHODS[selected.method].color }}>{EXPLAIN_METHODS[selected.method].label}</span>
+            <span className="retrieval-explain-rank">{formatRank(selectedWhy.rank, 4)}</span>
+          </h3>
+          <p className="retrieval-explain-text">{selectedWhy.whyHere}</p>
+          <p className="retrieval-explain-text">{selectedWhy.compare}</p>
+        </div>
+        <div className="retrieval-signal-card">
+          <div className="retrieval-explain-kicker">Signals used</div>
+          {selectedWhy.signals.map((signal) => (
+            <div key={signal.label} className="retrieval-signal-row">
+              <span>{signal.label}</span>
+              <strong>{signal.value}</strong>
+            </div>
+          ))}
+        </div>
+        <div className="retrieval-signal-card retrieval-tfidf-bm25">
+          <div className="retrieval-explain-kicker">TF-IDF vs BM25</div>
+          <div className="retrieval-compare-row">
+            <span>TF-IDF rank</span>
+            <strong>{formatRank(fullRankings.tfidf.findIndex((chunk) => chunk.id === selectedChunk.id), 4)}</strong>
+          </div>
+          <div className="retrieval-compare-row">
+            <span>BM25 rank</span>
+            <strong>{formatRank(fullRankings.bm25.findIndex((chunk) => chunk.id === selectedChunk.id), 4)}</strong>
+          </div>
+          <p className="retrieval-mini-takeaway">
+            BM25 still uses keywords, but it caps repetition and normalizes length. That is why it is usually less naive than TF-IDF.
+          </p>
+        </div>
+        <div className="retrieval-takeaway-card">
+          <div className="retrieval-explain-kicker">Takeaway</div>
+          <p>{selectedWhy.takeaway}</p>
+        </div>
       </div>
 
       <div className="retrieval-callout-row">
@@ -1664,11 +1729,16 @@ export default function App() {
         <div className="app-header-main">
           <div className="app-header-left">
             <div className="app-logo-mark" aria-hidden="true">
-              <svg viewBox="0 0 56 56" fill="none">
-                <rect width="56" height="56" rx="14" fill="#0f172a" />
-                <rect x="10" y="28" width="10" height="18" rx="3" fill="#6366f1" />
-                <rect x="23" y="18" width="10" height="28" rx="3" fill="#06b6d4" />
-                <rect x="36" y="10" width="10" height="36" rx="3" fill="#f59e0b" />
+              <svg viewBox="0 0 64 64" fill="none">
+                <rect width="64" height="64" rx="16" fill="#0f172a" />
+                <path d="M20 22L33 32L44 22M20 42L33 32L44 42M20 22V42M44 22V42" stroke="#64748b" strokeWidth="3.5" strokeLinecap="round" />
+                <path d="M20 22L33 15L44 22" stroke="#64748b" strokeWidth="3.5" strokeLinecap="round" />
+                <circle cx="20" cy="22" r="6" fill="#6366f1" />
+                <circle cx="20" cy="42" r="6" fill="#10b981" />
+                <circle cx="33" cy="32" r="7" fill="#06b6d4" />
+                <circle cx="44" cy="22" r="6" fill="#10b981" />
+                <circle cx="44" cy="42" r="6" fill="#f59e0b" />
+                <circle cx="33" cy="15" r="6" fill="#f59e0b" />
               </svg>
             </div>
             <div>
