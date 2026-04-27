@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   ScatterChart, Scatter, ZAxis,
@@ -23,6 +23,14 @@ const METHODS = [
 const CHART_COLORS = { precision: "#6366f1", recall: "#06b6d4", f1: "#10b981" };
 const GEN_STRATEGIES = ["stuffing", "mapreduce", "refine"];
 const GEN_LABELS = { stuffing: "Stuffing", mapreduce: "Map Reduce", refine: "Refine" };
+const SECTION_LINKS = [
+  { id: "playground", label: "Playground", short: "Live demo" },
+  { id: "retrieval", label: "Retrieval", short: "4 rankings" },
+  { id: "embedding", label: "Embeddings", short: "Vector space" },
+  { id: "hnsw", label: "HNSW", short: "Vector index" },
+  { id: "metrics", label: "Metrics", short: "Precision/Recall" },
+  { id: "generation", label: "Generation", short: "LLM usage" },
+];
 
 const TOPIC_COLORS = {
   ai:      { bg: "#ede9fe", color: "#6366f1" },
@@ -690,11 +698,167 @@ const TYPE_COLORS = {
   spam:    { bg: "#fff7ed", border: "#fdba74", badge: "#c2410c", text: "spam"    },
 };
 
-function ChunkCard({ chunk, rank, isRelevant, isHighlighted }) {
+const EXPLAIN_METHODS = {
+  tfidf: { label: "TF-IDF", color: "#6366f1" },
+  bm25: { label: "BM25", color: "#06b6d4" },
+  semantic: { label: "Semantic", color: "#10b981" },
+  hybrid: { label: "Hybrid", color: "#f59e0b" },
+};
+
+function tokenizeExplain(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length > 2);
+}
+
+function getOverlapTerms(query, chunk) {
+  const queryTerms = [...new Set(tokenizeExplain(query))];
+  const chunkTerms = new Set(tokenizeExplain(chunk.text));
+  return queryTerms.filter((term) => chunkTerms.has(term));
+}
+
+function formatRank(rank, k) {
+  return rank === -1 ? `outside top ${k}` : `#${rank + 1}`;
+}
+
+function buildWhyData({ methodKey, chunk, results, query, k, alphaNorm }) {
+  const methodList = results[methodKey] ?? [];
+  const rank = methodList.findIndex((item) => item.id === chunk.id);
+  const overlapTerms = getOverlapTerms(query, chunk);
+  const wordCount = chunk.text.split(/\s+/).length;
+  const bm25Rank = results.bm25.findIndex((item) => item.id === chunk.id);
+  const semanticRank = results.semantic.findIndex((item) => item.id === chunk.id);
+  const tfidfRank = results.tfidf.findIndex((item) => item.id === chunk.id);
+  const hybridRank = results.hybrid.findIndex((item) => item.id === chunk.id);
+  const above = rank > 0 ? methodList[rank - 1] : null;
+  const below = rank >= 0 && rank < methodList.length - 1 ? methodList[rank + 1] : null;
+  const score = methodList[rank]?.score ?? 0;
+  const topCutoff = rank > -1 && rank < k;
+  const overlapLabel = overlapTerms.length ? overlapTerms.join(", ") : "none";
+  const rrfK = 60;
+  const bm25Contribution = bm25Rank === -1 ? 0 : alphaNorm * (1 / (rrfK + bm25Rank + 1));
+  const semanticContribution = semanticRank === -1 ? 0 : (1 - alphaNorm) * (1 / (rrfK + semanticRank + 1));
+  const totalContribution = bm25Contribution + semanticContribution;
+  const maxContribution = 1 / (rrfK + 1);
+  const bm25Pct = maxContribution ? Math.round((bm25Contribution / maxContribution) * 100) : 0;
+  const semanticPct = maxContribution ? Math.round((semanticContribution / maxContribution) * 100) : 0;
+
+  if (methodKey === "tfidf") {
+    return {
+      rank,
+      score,
+      topCutoff,
+      signals: [
+        { label: "Exact terms", value: overlapLabel },
+        { label: "Term overlap", value: `${overlapTerms.length} query words` },
+        { label: "Chunk length", value: `${wordCount} words` },
+      ],
+      whyHere: overlapTerms.length
+        ? `TF-IDF put this chunk at ${formatRank(rank, k)} because it repeats exact query words with strong local density.`
+        : `TF-IDF pushed this chunk down because it shares almost no exact words with the query.`,
+      compare: above
+        ? `It sits below chunk #${above.id} because that chunk packs exact keyword matches more densely.`
+        : below
+          ? `It stays above chunk #${below.id} because its exact-match density is stronger.`
+          : `This method has no immediate neighbor to compare at the current K.`,
+      takeaway: chunk.type === "spam"
+        ? "Takeaway: TF-IDF can reward keyword-heavy text even when the context is wrong."
+        : chunk.type === "long"
+          ? "Takeaway: TF-IDF tends to prefer shorter chunks when the same keywords are spread across a longer passage."
+          : "Takeaway: TF-IDF is transparent and fast, but it only understands literal word overlap.",
+    };
+  }
+
+  if (methodKey === "bm25") {
+    return {
+      rank,
+      score,
+      topCutoff,
+      signals: [
+        { label: "Exact terms", value: overlapLabel },
+        { label: "BM25 vs TF-IDF", value: `${formatRank(rank, k)} vs ${formatRank(tfidfRank, k)}` },
+        { label: "Length handling", value: wordCount > 90 ? "long chunk normalized" : "short chunk still capped" },
+      ],
+      whyHere: overlapTerms.length
+        ? `BM25 ranked this chunk at ${formatRank(rank, k)} because it rewards exact matches, but it tempers repetition and normalizes length better than TF-IDF.`
+        : `BM25 left this chunk low because, like TF-IDF, it still depends on exact keyword matches.`,
+      compare: chunk.type === "long"
+        ? "BM25 is kinder to this long chunk than TF-IDF because the extra length is normalized instead of being punished linearly."
+        : chunk.type === "spam"
+          ? "BM25 still likes this spam chunk because the exact keywords are present, even though the context is misleading."
+          : above
+            ? `Compared with chunk #${above.id}, BM25 sees slightly weaker exact-match evidence here after normalization.`
+            : `Compared with chunk #${below?.id}, BM25 gives this chunk the stronger normalized keyword signal.`,
+      takeaway: "Takeaway: BM25 is usually a better keyword retriever than TF-IDF, but it is still not semantic.",
+    };
+  }
+
+  if (methodKey === "semantic") {
+    return {
+      rank,
+      score,
+      topCutoff,
+      signals: [
+        { label: "Semantic score", value: score.toFixed(3) },
+        { label: "Exact terms", value: overlapLabel },
+        { label: "Chunk type", value: chunk.type },
+      ],
+      whyHere: chunk.type === "synonym"
+        ? `Semantic search ranked this chunk at ${formatRank(rank, k)} even without exact keywords because its embedding is close in meaning to the query.`
+        : `Semantic search put this chunk at ${formatRank(rank, k)} because its meaning sits close to the query in embedding space.`,
+      compare: chunk.type === "spam"
+        ? "Its context is about the wrong thing, so the embedding stays farther away even though some words overlap."
+        : above
+          ? `It sits below chunk #${above.id} because that chunk is semantically closer in vector space.`
+          : below
+            ? `It stays above chunk #${below.id} because its meaning is closer to the query vector.`
+            : `This method has no immediate neighbor to compare at the current K.`,
+      takeaway: chunk.type === "synonym"
+        ? "Takeaway: semantic retrieval can recover paraphrases that keyword methods miss."
+        : "Takeaway: semantic retrieval follows meaning, not just exact words.",
+    };
+  }
+
+  return {
+    rank,
+    score,
+    topCutoff,
+    fusion: {
+      bm25Contribution,
+      semanticContribution,
+      totalContribution,
+      bm25Pct,
+      semanticPct,
+      direction: bm25Rank < semanticRank
+        ? "This chunk moves up when alpha moves toward BM25."
+        : semanticRank < bm25Rank
+          ? "This chunk moves up when alpha moves toward Semantic."
+          : "Both retrievers rank this chunk similarly, so alpha changes it less.",
+    },
+    signals: [
+      { label: "BM25 rank", value: formatRank(bm25Rank, k) },
+      { label: "Semantic rank", value: formatRank(semanticRank, k) },
+      { label: "Alpha blend", value: `${(alphaNorm * 100).toFixed(0)}% BM25 · ${((1 - alphaNorm) * 100).toFixed(0)}% semantic` },
+    ],
+    whyHere: `Hybrid ranked this chunk at ${formatRank(hybridRank, k)} by blending BM25 and semantic evidence with alpha = ${alphaNorm.toFixed(2)}.`,
+    compare: alphaNorm >= 0.5
+      ? `The slider currently gives more voice to BM25. ${bm25Rank < semanticRank ? "That helps this chunk because its keyword rank is stronger." : "That hurts this chunk if its semantic rank is the stronger signal."}`
+      : `The slider currently gives more voice to semantic retrieval. ${semanticRank < bm25Rank ? "That helps this chunk because its embedding rank is stronger." : "That hurts this chunk if its keyword rank is the stronger signal."}`,
+    takeaway: "Takeaway: hybrid ranking works because it can combine exact-match strength with semantic closeness instead of choosing only one.",
+  };
+}
+
+function ChunkCard({ chunk, rank, isRelevant, isHighlighted, isSelected, onSelect }) {
   const tc = TYPE_COLORS[chunk.type] || TYPE_COLORS.normal;
   return (
-    <div className={`chunk-card ${isHighlighted ? "chunk-card--hl" : ""} ${isRelevant === false ? "chunk-card--miss" : ""}`}
-      style={isHighlighted ? { borderColor: tc.border, background: tc.bg } : {}}>
+    <button
+      type="button"
+      className={`chunk-card ${isHighlighted ? "chunk-card--hl" : ""} ${isRelevant === false ? "chunk-card--miss" : ""} ${isSelected ? "chunk-card--selected" : ""}`}
+      style={isHighlighted || isSelected ? { borderColor: tc.border, background: tc.bg } : {}}
+      onClick={onSelect}
+    >
       <div className="chunk-card-top">
         <span className="chunk-card-rank">#{rank + 1}</span>
         <span className="chunk-card-badge" style={{ background: tc.bg, color: tc.badge }}>
@@ -706,7 +870,8 @@ function ChunkCard({ chunk, rank, isRelevant, isHighlighted }) {
           </span>
         )}
       </div>
-    </div>
+      <div className="chunk-card-text">{chunk.text.slice(0, 90)}…</div>
+    </button>
   );
 }
 
@@ -717,6 +882,8 @@ function PlaygroundSection() {
   const [k, setK]                       = useState(3);
   const [alpha, setAlpha]               = useState(50);    // 0–100, maps to 0.0–1.0
   const [hoveredChunk, setHoveredChunk] = useState(null);
+  const [selectedChunkId, setSelectedChunkId] = useState(0);
+  const [selectedMethod, setSelectedMethod] = useState("hybrid");
 
   const alphaNorm = alpha / 100;   // 0 = pure semantic, 1 = pure BM25
   const q = activeQuery;
@@ -746,6 +913,34 @@ function PlaygroundSection() {
   }, [results, k]);
 
   const relevantSet = q ? new Set(q.relevant) : new Set();
+  const visibleChunks = useMemo(() => {
+    if (!results) return [];
+    const visibleIds = new Set([
+      ...q.relevant,
+      ...results.bm25.slice(0, k).map((chunk) => chunk.id),
+      ...results.semantic.slice(0, k).map((chunk) => chunk.id),
+      ...results.hybrid.slice(0, k).map((chunk) => chunk.id),
+      selectedChunkId,
+    ]);
+    return CHUNKS.filter((chunk) => visibleIds.has(chunk.id));
+  }, [results, q, k, selectedChunkId]);
+  const selectedChunk = CHUNKS.find((chunk) => chunk.id === selectedChunkId) ?? CHUNKS[0];
+  const whyData = useMemo(() => {
+    if (!results || !selectedChunk || !q) return null;
+    return buildWhyData({
+      methodKey: selectedMethod,
+      chunk: selectedChunk,
+      results,
+      query: q.query,
+      k,
+      alphaNorm,
+    });
+  }, [results, selectedChunk, selectedMethod, q, k, alphaNorm]);
+
+  useEffect(() => {
+    setSelectedMethod("hybrid");
+    setSelectedChunkId(q.relevant[0]);
+  }, [q]);
 
   const COLS = [
     { key: "tfidf",    label: "TF-IDF",   color: "#6366f1" },
@@ -789,10 +984,15 @@ function PlaygroundSection() {
 
         <div className="pg-body">
 
-          {/* Left: source document chunk map */}
+          {/* Left: query context */}
           <div className="pg-doc-panel">
-            <div className="pg-doc-title">Document · {CHUNKS.length} chunks</div>
-            {CHUNKS.map((chunk) => {
+            <div className="pg-doc-title">Query context</div>
+            <div className="pg-query-card">
+              <div className="pg-query-label">User query</div>
+              <div className="pg-query-text">{q.query}</div>
+              <div className="pg-query-meta">{visibleChunks.length} candidate chunks shown from the corpus</div>
+            </div>
+            {visibleChunks.map((chunk) => {
               const inTopBM25 = topIds.bm25?.has(chunk.id);
               const inTopSem  = topIds.semantic?.has(chunk.id);
               const inTopHyb  = topIds.hybrid?.has(chunk.id);
@@ -800,13 +1000,18 @@ function PlaygroundSection() {
               const tc        = TYPE_COLORS[chunk.type];
               return (
                 <div key={chunk.id}
-                  className={`pg-chunk-block ${hoveredChunk === chunk.id ? "pg-chunk-block--hover" : ""}`}
-                  style={{ borderLeftColor: inTopHyb ? tc.border : "#e2e8f0" }}
+                  className={`pg-chunk-block ${hoveredChunk === chunk.id ? "pg-chunk-block--hover" : ""} ${selectedChunkId === chunk.id ? "pg-chunk-block--selected" : ""}`}
+                  style={{ borderLeftColor: inTopHyb || selectedChunkId === chunk.id ? tc.border : "#e2e8f0" }}
                   onMouseEnter={() => setHoveredChunk(chunk.id)}
-                  onMouseLeave={() => setHoveredChunk(null)}>
+                  onMouseLeave={() => setHoveredChunk(null)}
+                  onClick={() => {
+                    setSelectedMethod("hybrid");
+                    setSelectedChunkId(chunk.id);
+                  }}>
                   <div className="pg-chunk-meta">
                     <span className="pg-chunk-id">#{chunk.id}</span>
                     <span className="pg-chunk-type" style={{ color: tc.badge }}>{tc.text}</span>
+                    {relevantSet.has(chunk.id) && <span className="pg-context-role">ground truth</span>}
                     <div className="pg-chunk-hits">
                       {inTopBM25 && <span className="pg-hit" style={{color:"#06b6d4"}}>BM25</span>}
                       {inTopSem  && <span className="pg-hit" style={{color:"#10b981"}}>Sem</span>}
@@ -814,63 +1019,139 @@ function PlaygroundSection() {
                     </div>
                     {!isRel && chunk.type === "spam" && <span className="pg-spam-tag">spam</span>}
                   </div>
+                  <div className="pg-chunk-preview">{chunk.text}</div>
                 </div>
               );
             })}
           </div>
 
-          {/* Right: BM25 | HYBRID (live) | Semantic */}
+          {/* Center: BM25 | HYBRID (live) | Semantic */}
           <div className="pg-results-panel">
 
-            {/* 3 metric cards */}
-            <div className="pg-three-metrics">
-              <div className="pg-mini-mc" style={{borderTopColor:"#06b6d4"}}>
-                <div className="pg-mini-mc-name" style={{color:"#06b6d4"}}>BM25 <span className="pg-mc-hint">α=1</span></div>
-                <div className="pg-mini-mc-vals">
-                  <span>P {(metrics.bm25.precision*100).toFixed(0)}%</span>
-                  <span>·</span>
-                  <span>R {(metrics.bm25.recall*100).toFixed(0)}%</span>
-                  <span>·</span>
-                  <span>F1 {(metrics.bm25.f1*100).toFixed(0)}%</span>
+              {/* 3 metric cards */}
+              <div className="pg-three-metrics">
+                <div className="pg-mini-mc" style={{borderTopColor:"#06b6d4"}}>
+                  <div className="pg-mini-mc-name" style={{color:"#06b6d4"}}>BM25 <span className="pg-mc-hint">α=1</span></div>
+                  <div className="pg-mini-mc-vals">
+                    <span>P {(metrics.bm25.precision*100).toFixed(0)}%</span>
+                    <span>·</span>
+                    <span>R {(metrics.bm25.recall*100).toFixed(0)}%</span>
+                    <span>·</span>
+                    <span>F1 {(metrics.bm25.f1*100).toFixed(0)}%</span>
+                  </div>
+                </div>
+                <div className="pg-live-mc">
+                  <div className="pg-live-mc-name">HYBRID <span className="pg-mc-hint">α={alphaNorm.toFixed(2)}</span></div>
+                  <MetricBar label="P" value={metrics.hybrid.precision} color="#6366f1" />
+                  <MetricBar label="R" value={metrics.hybrid.recall}    color="#06b6d4" />
+                  <MetricBar label="F1" value={metrics.hybrid.f1}       color="#10b981" />
+                </div>
+                <div className="pg-mini-mc" style={{borderTopColor:"#10b981"}}>
+                  <div className="pg-mini-mc-name" style={{color:"#10b981"}}>Semantic <span className="pg-mc-hint">α=0</span></div>
+                  <div className="pg-mini-mc-vals">
+                    <span>P {(metrics.semantic.precision*100).toFixed(0)}%</span>
+                    <span>·</span>
+                    <span>R {(metrics.semantic.recall*100).toFixed(0)}%</span>
+                    <span>·</span>
+                    <span>F1 {(metrics.semantic.f1*100).toFixed(0)}%</span>
+                  </div>
                 </div>
               </div>
-              <div className="pg-live-mc">
-                <div className="pg-live-mc-name">HYBRID <span className="pg-mc-hint">α={alphaNorm.toFixed(2)}</span></div>
-                <MetricBar label="P" value={metrics.hybrid.precision} color="#6366f1" />
-                <MetricBar label="R" value={metrics.hybrid.recall}    color="#06b6d4" />
-                <MetricBar label="F1" value={metrics.hybrid.f1}       color="#10b981" />
-              </div>
-              <div className="pg-mini-mc" style={{borderTopColor:"#10b981"}}>
-                <div className="pg-mini-mc-name" style={{color:"#10b981"}}>Semantic <span className="pg-mc-hint">α=0</span></div>
-                <div className="pg-mini-mc-vals">
-                  <span>P {(metrics.semantic.precision*100).toFixed(0)}%</span>
-                  <span>·</span>
-                  <span>R {(metrics.semantic.recall*100).toFixed(0)}%</span>
-                  <span>·</span>
-                  <span>F1 {(metrics.semantic.f1*100).toFixed(0)}%</span>
-                </div>
-              </div>
-            </div>
 
-            {/* 3 result columns */}
-            <div className="pg-three-cols">
-              {[
-                {key:"bm25",     label:"BM25",     color:"#06b6d4"},
-                {key:"hybrid",   label:"HYBRID",   color:"#f59e0b", live:true},
-                {key:"semantic", label:"Semantic", color:"#10b981"},
-              ].map(({key, label, color, live}) => (
-                <div key={key} className={`pg-tcol ${live ? "pg-tcol--live" : ""}`} style={{borderTopColor:color}}>
-                  <div className="pg-tcol-label" style={{color}}>{label} <span className="pg-mc-hint">top {k}</span></div>
-                  {results[key].slice(0, k).map((chunk, rank) => (
-                    <ChunkCard key={chunk.id} chunk={chunk} rank={rank}
-                      isRelevant={relevantSet.has(chunk.id)}
-                      isHighlighted={hoveredChunk === chunk.id}
-                    />
+              {/* 3 result columns */}
+              <div className="pg-three-cols">
+                {[
+                  {key:"bm25",     label:"BM25",     color:"#06b6d4"},
+                  {key:"hybrid",   label:"HYBRID",   color:"#f59e0b", live:true},
+                  {key:"semantic", label:"Semantic", color:"#10b981"},
+                ].map(({key, label, color, live}) => (
+                  <div key={key} className={`pg-tcol ${live ? "pg-tcol--live" : ""}`} style={{borderTopColor:color}}>
+                    <div className="pg-tcol-label" style={{color}}>{label} <span className="pg-mc-hint">top {k}</span></div>
+                    {results[key].slice(0, k).map((chunk, rank) => (
+                      <ChunkCard key={chunk.id} chunk={chunk} rank={rank}
+                        isRelevant={relevantSet.has(chunk.id)}
+                        isHighlighted={hoveredChunk === chunk.id}
+                        isSelected={selectedChunkId === chunk.id}
+                        onSelect={() => {
+                          setSelectedChunkId(chunk.id);
+                          setSelectedMethod(key);
+                        }}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
+          </div>
+
+          {selectedChunk && whyData && (
+            <aside className="pg-why-panel">
+              <div className="pg-why-top">
+                <div>
+                  <div className="pg-why-kicker">Why this rank</div>
+                  <h3 className="pg-why-title">
+                    Chunk #{selectedChunk.id} in <span style={{ color: EXPLAIN_METHODS[selectedMethod].color }}>{EXPLAIN_METHODS[selectedMethod].label}</span>
+                  </h3>
+                </div>
+                <span className="pg-why-rank">{formatRank(whyData.rank, k)}</span>
+              </div>
+
+              <div className="pg-why-chips">
+                <span className="pg-why-chip" style={{ background: TYPE_COLORS[selectedChunk.type].bg, color: TYPE_COLORS[selectedChunk.type].badge }}>
+                  {selectedChunk.type}
+                </span>
+                <span className={`pg-why-chip ${whyData.topCutoff ? "is-good" : "is-muted"}`}>
+                  {whyData.topCutoff ? `visible in top ${k}` : `hidden at top ${k}`}
+                </span>
+              </div>
+
+              <div className="pg-why-copy">{whyData.whyHere}</div>
+
+              <div className="pg-why-block">
+                <div className="pg-why-block-title">Signals</div>
+                <div className="pg-why-signals">
+                  {whyData.signals.map((signal) => (
+                    <div key={signal.label} className="pg-why-signal">
+                      <span className="pg-why-signal-label">{signal.label}</span>
+                      <span className="pg-why-signal-value">{signal.value}</span>
+                    </div>
                   ))}
                 </div>
-              ))}
-            </div>
-          </div>
+              </div>
+
+              <div className="pg-why-block">
+                <div className="pg-why-block-title">Why here</div>
+                <div className="pg-why-copy pg-why-copy--tight">{whyData.compare}</div>
+              </div>
+
+              {selectedMethod === "hybrid" && whyData.fusion && (
+                <div className="pg-why-block">
+                  <div className="pg-why-block-title">Alpha blend</div>
+                  <div className="pg-fusion-bars">
+                    <div className="pg-fusion-row">
+                      <span>BM25 voice</span>
+                      <div className="pg-fusion-track">
+                        <div className="pg-fusion-fill pg-fusion-fill--bm25" style={{ width: `${Math.min(100, whyData.fusion.bm25Pct)}%` }} />
+                      </div>
+                      <strong>{whyData.fusion.bm25Pct}%</strong>
+                    </div>
+                    <div className="pg-fusion-row">
+                      <span>Semantic voice</span>
+                      <div className="pg-fusion-track">
+                        <div className="pg-fusion-fill pg-fusion-fill--semantic" style={{ width: `${Math.min(100, whyData.fusion.semanticPct)}%` }} />
+                      </div>
+                      <strong>{whyData.fusion.semanticPct}%</strong>
+                    </div>
+                  </div>
+                  <div className="pg-alpha-note">{whyData.fusion.direction}</div>
+                </div>
+              )}
+
+              <div className="pg-why-block">
+                <div className="pg-why-block-title">Takeaway</div>
+                <div className="pg-takeaway">{whyData.takeaway}</div>
+              </div>
+            </aside>
+          )}
         </div>
       </>)}
     </section>
@@ -1338,30 +1619,75 @@ function DatasetSection() {
 // ── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [activeSection, setActiveSection] = useState("playground");
+  const [showTopButton, setShowTopButton] = useState(false);
+
+  useEffect(() => {
+    const sections = SECTION_LINKS
+      .map(({ id }) => document.getElementById(id))
+      .filter(Boolean);
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+
+        if (visible[0]?.target?.id) {
+          setActiveSection(visible[0].target.id);
+        }
+      },
+      {
+        rootMargin: "-20% 0px -55% 0px",
+        threshold: [0.2, 0.35, 0.55, 0.75],
+      }
+    );
+
+    sections.forEach((section) => observer.observe(section));
+
+    const onScroll = () => {
+      setShowTopButton(window.scrollY > 600);
+    };
+
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("scroll", onScroll);
+    };
+  }, []);
+
   return (
     <div className="app">
       <header className="app-header">
-        <div className="app-header-left">
-          <div className="app-logo-mark" aria-hidden="true">
-            <svg viewBox="0 0 56 56" fill="none">
-              <rect width="56" height="56" rx="14" fill="#0f172a" />
-              <rect x="10" y="28" width="10" height="18" rx="3" fill="#6366f1" />
-              <rect x="23" y="18" width="10" height="28" rx="3" fill="#06b6d4" />
-              <rect x="36" y="10" width="10" height="36" rx="3" fill="#f59e0b" />
-            </svg>
-          </div>
-          <div>
-            <h1 className="app-title">RAG Playground</h1>
-            <p className="app-subtitle">TF-IDF vs BM25 vs Semantic vs Hybrid, with live Precision, Recall and F1</p>
+        <div className="app-header-main">
+          <div className="app-header-left">
+            <div className="app-logo-mark" aria-hidden="true">
+              <svg viewBox="0 0 56 56" fill="none">
+                <rect width="56" height="56" rx="14" fill="#0f172a" />
+                <rect x="10" y="28" width="10" height="18" rx="3" fill="#6366f1" />
+                <rect x="23" y="18" width="10" height="28" rx="3" fill="#06b6d4" />
+                <rect x="36" y="10" width="10" height="36" rx="3" fill="#f59e0b" />
+              </svg>
+            </div>
+            <div>
+              <h1 className="app-title">RAG Playground</h1>
+              <p className="app-subtitle">TF-IDF vs BM25 vs Semantic vs Hybrid, with live Precision, Recall and F1</p>
+            </div>
           </div>
         </div>
-        <nav className="app-nav-links">
-          <a href="#playground">Playground</a>
-          <a href="#retrieval">Retrieval</a>
-          <a href="#embedding">Embeddings</a>
-          <a href="#hnsw">HNSW</a>
-          <a href="#metrics">Metrics</a>
-          <a href="#generation">Generation</a>
+
+        <nav className="app-nav-links" aria-label="Section navigation">
+          {SECTION_LINKS.map((section) => (
+            <a
+              key={section.id}
+              href={`#${section.id}`}
+              className={activeSection === section.id ? "active" : ""}
+            >
+              {section.label}
+            </a>
+          ))}
         </nav>
       </header>
 
@@ -1373,6 +1699,15 @@ export default function App() {
         <MetricsSection />
         <GenerationSection />
       </main>
+
+      <button
+        type="button"
+        className={`scroll-top-btn ${showTopButton ? "visible" : ""}`}
+        onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        aria-label="Scroll to top"
+      >
+        Top
+      </button>
 
       <footer className="app-footer">
         <div className="footer-rule" />
